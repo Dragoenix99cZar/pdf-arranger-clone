@@ -1,0 +1,35 @@
+[package]
+name = "pdf-arranger-clone"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+thiserror = "2"
+
+# GUI
+eframe = "0.33"
+egui = "0.33"
+
+# PDF rendering and thumbnails
+pdfium-render = "0.9"
+
+# Image conversion and thumbnail encoding
+image = "0.25"
+
+# PDF structure manipulation
+lopdf = "0.36"
+
+# IDs for pages and documents
+uuid = { version = "1", features = ["v4"] }
+
+# File dialogs
+rfd = "0.15"
+
+# Optional: background jobs and channels
+crossbeam-channel = "0.5"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
