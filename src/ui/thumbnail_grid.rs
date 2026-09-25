@@ -77,8 +77,10 @@ pub fn show_thumbnail_grid(app: &mut PdfArrangerApp, ui: &mut egui::Ui) {
                             if let Some(texture) = app.texture_cache.get(&page.id) {
                                 Some(texture.clone())
                             } else {
-                                app.status_message = format!("Processing page: {}", page.source_page);
-                                let pdf_path = app.project.source_files[page.source_document].clone();
+                                app.status_message =
+                                    format!("Processing page: {}", page.source_page);
+                                let pdf_path =
+                                    app.project.source_files[page.source_document].clone();
 
                                 let img = app
                                     .renderer
@@ -210,13 +212,16 @@ pub fn show_thumbnail_grid(app: &mut PdfArrangerApp, ui: &mut egui::Ui) {
                                 app.last_clicked_id = Some(page.id);
                             } else if modifiers.shift {
                                 // Shift + Left Click: Select range from anchor to current page
-                                let current_idx = app.project.pages
+                                let current_idx = app
+                                    .project
+                                    .pages
                                     .iter()
                                     .position(|p| p.id == page.id)
                                     .unwrap_or(0);
 
                                 let anchor_idx = if let Some(last_id) = app.last_clicked_id {
-                                    app.project.pages
+                                    app.project
+                                        .pages
                                         .iter()
                                         .position(|p| p.id == last_id)
                                         .unwrap_or(current_idx)
@@ -240,14 +245,14 @@ pub fn show_thumbnail_grid(app: &mut PdfArrangerApp, ui: &mut egui::Ui) {
                             }
 
                             // Debug print to console
-                            let pdf_path = &app.project.source_files[page.source_document];
-                            println!(
-                                "Clicked Page ID: {} | Source Page: {} | File: {:?} | Total Selected: {}",
-                                page.id,
-                                page.source_page,
-                                pdf_path,
-                                app.selected_ids.len()
-                            );
+                            // let pdf_path = &app.project.source_files[page.source_document];
+                            // println!(
+                            //     "Clicked Page ID: {} | Source Page: {} | File: {:?} | Total Selected: {}",
+                            //     page.id,
+                            //     page.source_page,
+                            //     pdf_path,
+                            //     app.selected_ids.len()
+                            // );
                         }
                     }
                 });

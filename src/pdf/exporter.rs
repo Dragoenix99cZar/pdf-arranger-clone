@@ -1,5 +1,6 @@
 use crate::model::project::Project;
 use lopdf::{Dictionary, Document, Object, ObjectId};
+use std::collections::HashMap;
 use std::path::Path;
 
 pub fn export_project(
@@ -26,8 +27,9 @@ pub fn export_project(
         let pages_map = src_doc.get_pages();
 
         if let Some(&src_page_id) = pages_map.get(&page_item.source_page) {
-            // Recursively copy the page object and all its dependencies (resources, contents streams, etc.)
-            let new_page_id = copy_object_recursively(src_doc, &mut dest_doc, src_page_id);
+            // Keep track of visited object IDs per page to avoid duplicate copying cycles
+            let mut visited = HashMap::new();
+            let new_page_id = copy_object_deep(src_doc, &mut dest_doc, src_page_id, &mut visited);
             cloned_page_ids.push(new_page_id);
         }
     }
@@ -72,66 +74,92 @@ pub fn export_project(
     Ok(())
 }
 
-/// Helper function to recursively copy an object and its references from source to destination document
-fn copy_object_recursively(
+/// Recursively copy an object, its deep dictionary fields, font descriptors, and stream buffers.
+fn copy_object_deep(
     src_doc: &Document,
     dest_doc: &mut Document,
     obj_id: ObjectId,
+    visited: &mut HashMap<ObjectId, ObjectId>,
 ) -> ObjectId {
+    if let Some(&new_id) = visited.get(&obj_id) {
+        return new_id;
+    }
+
     let obj = match src_doc.get_object(obj_id) {
         Ok(o) => o,
         Err(_) => return obj_id,
     };
 
     let new_id = dest_doc.new_object_id();
+    visited.insert(obj_id, new_id);
 
-    // Insert a placeholder first to handle potential circular references gracefully
-    match obj {
-        Object::Dictionary(_) => {
-            dest_doc
-                .objects
-                .insert(new_id, Object::Dictionary(Dictionary::new()));
-        }
-        Object::Array(_) => {
-            dest_doc.objects.insert(new_id, Object::Array(Vec::new()));
-        }
-        _ => {
-            dest_doc.objects.insert(new_id, obj.clone());
-            return new_id;
-        }
-    }
-
-    let cloned_obj = map_object_references(src_doc, dest_doc, obj);
-    dest_doc.objects.insert(new_id, cloned_obj);
-    new_id
-}
-
-/// Maps and copies nested objects/references
-fn map_object_references(src_doc: &Document, dest_doc: &mut Document, obj: &Object) -> Object {
-    match obj {
-        Object::Reference(ref_id) => {
-            // Recursively copy referenced objects (like Contents or Resources streams/dictionaries)
-            let new_ref_id = copy_object_recursively(src_doc, dest_doc, *ref_id);
-            Object::Reference(new_ref_id)
-        }
+    let cloned_obj = match obj {
         Object::Dictionary(dict) => {
             let mut new_dict = Dictionary::new();
             for (key, value) in dict.iter() {
-                // Skip the Parent key so it doesn't point back to the old document's Pages root tree
+                // Skip the Parent link to avoid circular hierarchy tree bugs
                 if key == b"Parent" {
                     continue;
                 }
-                new_dict.set(key.clone(), map_object_references(src_doc, dest_doc, value));
+                new_dict.set(
+                    key.clone(),
+                    map_value_deep(src_doc, dest_doc, value, visited),
+                );
             }
             Object::Dictionary(new_dict)
         }
         Object::Array(arr) => {
             let new_arr = arr
                 .iter()
-                .map(|v| map_object_references(src_doc, dest_doc, v))
+                .map(|v| map_value_deep(src_doc, dest_doc, v, visited))
                 .collect();
             Object::Array(new_arr)
         }
+        Object::Stream(stream) => {
+            let mut new_dict = Dictionary::new();
+            for (key, value) in stream.dict.iter() {
+                new_dict.set(
+                    key.clone(),
+                    map_value_deep(src_doc, dest_doc, value, visited),
+                );
+            }
+            let mut new_stream = stream.clone();
+            new_stream.dict = new_dict;
+            Object::Stream(new_stream)
+        }
         _ => obj.clone(),
+    };
+
+    dest_doc.objects.insert(new_id, cloned_obj);
+    new_id
+}
+
+/// Maps object references recursively across documents.
+fn map_value_deep(
+    src_doc: &Document,
+    dest_doc: &mut Document,
+    value: &Object,
+    visited: &mut HashMap<ObjectId, ObjectId>,
+) -> Object {
+    match value {
+        Object::Reference(ref_id) => {
+            let mapped_id = copy_object_deep(src_doc, dest_doc, *ref_id, visited);
+            Object::Reference(mapped_id)
+        }
+        Object::Dictionary(dict) => {
+            let mut new_dict = Dictionary::new();
+            for (k, v) in dict.iter() {
+                new_dict.set(k.clone(), map_value_deep(src_doc, dest_doc, v, visited));
+            }
+            Object::Dictionary(new_dict)
+        }
+        Object::Array(arr) => {
+            let new_arr = arr
+                .iter()
+                .map(|v| map_value_deep(src_doc, dest_doc, v, visited))
+                .collect();
+            Object::Array(new_arr)
+        }
+        other => other.clone(),
     }
 }
