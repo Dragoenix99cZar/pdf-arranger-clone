@@ -179,17 +179,36 @@ Disadvantage:
 * **Milestone 5: PDF Export**
 * Bundle and export the arranged project layout back into a standalone PDF file using `lopdf`.
 
+---
 
-## Current Status
-- Open pdf file or drag-n-drop
-- Thumbnail of each pages
-- Change thumbnail column
-- Change thumbnail size
+## 25 Sep 2026
+## Achieved Milestones & Features
+
+- **Milestone 1: File Loading & Ingestion**
+  - Implemented native file dialogs (`rfd`) and drag-and-drop inputs to load PDF documents.
+  - Extracted metadata and page counts seamlessly using `lopdf`.
+
+* **Milestone 2: PDF Rendering Engine**
+  - Built a high-performance `PdfRenderer` module utilizing `pdfium-render`.
+  - Converted individual PDF pages into crisp dynamic image thumbnails with live processing feedback in the status bar.
+
+* **Milestone 3: UI Thumbnail Grid & Layout**
+  - Developed an interactive, scrollable thumbnail grid UI supporting single selection, `Ctrl` multi-selection, and `Shift` range selection.
+  - Integrated efficient texture caching to optimize memory usage and rendering performance.
+  - Added customizable column counts and dynamic thumbnail scaling via top-panel sliders, featuring a compact text-only view when scaled down to the minimum size.
+
+* **Milestone 4: Page & Document Manipulation**
+  - Implemented robust project model functions for page deletion, duplication, and reordering.
+  - Added context menus and keyboard shortcuts (`Delete`/`Backspace`, `Ctrl + D`, `Ctrl + Arrow Keys`, and "Invert Selection") for intuitive layout management.
+
+* **Milestone 5: PDF Export**
+  - Implemented a recursive PDF exporter via `lopdf` that accurately compiles arranged project pages.
+  - Preserved deep-object trees, vector graphics, layouts, and special embedded fonts in exported documents.
 
 
 ### Screenshots
 
-- <img src="./screenshots/pdf-arranger-clone.webp">
+<img src="./screenshots/pdf-arranger-clone.webp">
 
 
-- <img src="./screenshots/pdf-arranger.gif">
+<img src="./screenshots/pdf-arranger.gif">
