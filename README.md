@@ -132,83 +132,69 @@ Disadvantage:
 
 - Requires a compatible PDFium shared library or bundled binary.
 
-### Suggested Development Milestones
-* **Milestone 1:** Open a single PDF file using file dialogs and the project model.
-* **Milestone 2:** Render page previews and thumbnails using `pdfium-render`.
-* **Milestone 3:** Build the UI grid to display pages and handle basic user selection.
-* **Milestone 4:** Implement core document model actions: reordering, deletion, duplication, and rotation.
-* **Milestone 5:** Export the arranged project back to a PDF using a tested page-copy/merge implementation (`lopdf`).
-* **Milestone 6:** Scale up the application to handle multiple input PDFs simultaneously.
-
----
----
-## Features and milestones achieved so far, along with the upcoming tasks on your roadmap:
-
-### Achieved Milestones & Features
-
-* **Milestone 1: File Loading & Ingestion**
-* Implemented native file dialogs (`rfd`) and drag-and-drop file inputs to load PDF documents.
-* Extracted page counts successfully using `lopdf`.
-
-
-* **Milestone 2: PDF Rendering Engine**
-* Built the `PdfRenderer` module utilizing `pdfium-render` and local dynamic libraries.
-* Converted individual PDF pages into dynamic image thumbnails.
-
-
-* **Milestone 3: UI Thumbnail Grid & Layout**
-* Created a scrollable thumbnail grid UI supporting single and multi-page selections.
-* Implemented texture caching to efficiently handle memory and rendering performance.
-* Added customizable column counts and dynamic thumbnail sizing controls via top-panel sliders.
-* Integrated a bottom status bar providing real-time rendering progress feedback when opening large PDF files.
-* Pinned the vertical scroll bar flush to the right border of the application window.
-
-
+### Development Milestones
+* **Milestone 1:** Open single and multiple PDF files using native dialogs and drag-and-drop. *(Achieved)*
+* **Milestone 2:** Non-blocking page preview and thumbnail rendering via background worker (`pdfium-render` + `crossbeam-channel`). *(Achieved)*
+* **Milestone 3:** Interactive UI grid with single/multi/range selection, dynamic zooming, and responsive layouts. *(Achieved)*
+* **Milestone 4:** Document model manipulation: reordering, deletion, and duplication. *(Achieved)*
+* **Milestone 5:** Vector/object PDF export with resource deduplication, compression, and bookmark (`/Outlines`) preservation. *(Achieved)*
+* **Milestone 6:** Page rotation (90° / 180° / 270°) with live thumbnail updates and export `/Rotate` tags. *(Roadmap)*
+* **Milestone 7:** Undo / Redo command history stack (`Ctrl+Z`, `Ctrl+Y`). *(Roadmap)*
+* **Milestone 8:** Direct drag-and-drop card reordering in the grid. *(Roadmap)*
 
 ---
 
-### Todo List / Upcoming Milestones
+## Issues Identified & Solutions Implemented
 
-* **Milestone 4: Document & Page Manipulation**
-* Implement page reordering.
-* Implement page deletion.
-* Implement page duplication.
-* Implement page rotation.
+### 1. Export File Size Bloat (Duplicate Shared Resources)
+* **Problem**: Opening a PDF (e.g. 3 MB) and exporting it with zero modifications produced an output file significantly larger than the original.
+* **Root Cause**: The visited object tracking map in `src/pdf/exporter.rs` was instantiated inside the loop for each page. Shared indirect objects (embedded TrueType/OpenType/CFF font streams, header logos, images/XObjects, color profiles) were duplicated *N* times across *N* pages. Additionally, stream compression (`compress()`) and orphaned object pruning were omitted.
+* **Solution**:
+  - Implemented persistent per-document object deduplication (`visited_per_doc: Vec<HashMap<ObjectId, ObjectId>>`) in [`src/pdf/exporter.rs`](file:///d:/Work/Repos/my_repo/pdf-arranger-clone/src/pdf/exporter.rs).
+  - Every project page receives its own independent page dictionary in the destination document (preserving page hierarchy validity), while all referenced fonts, images, and streams are shared and copied only once.
+  - Added [`dest_doc.prune_objects()`](file:///d:/Work/Repos/my_repo/pdf-arranger-clone/src/pdf/exporter.rs) and [`dest_doc.compress()`](file:///d:/Work/Repos/my_repo/pdf-arranger-clone/src/pdf/exporter.rs).
 
+### 2. Missing Table of Contents / Bookmarks (`/Outlines`)
+* **Problem**: Original PDF bookmarks, navigation outlines, and tables of contents were discarded on export.
+* **Solution**:
+  - Implemented recursive outline tree extraction from each source document Catalog.
+  - Handled explicit destinations (`/Dest [page /XYZ ...]`), GoTo actions (`/A << /S /GoTo /D ... >>`), and named destinations (resolved via `/Catalog /Dests` and `/Names -> /Dests` name trees).
+  - Remapped all bookmark target destinations to their new page locations in the arranged project.
+  - Pruned bookmarks pointing to deleted pages that have no surviving child items.
+  - Added `/PageMode /UseOutlines` to the output Catalog so PDF viewers automatically open with the bookmarks sidebar visible.
 
-* **Milestone 5: PDF Export**
-* Bundle and export the arranged project layout back into a standalone PDF file using `lopdf`.
+### 3. UI Freezes & Main-Thread Thumbnail Lag
+* **Problem**: Thumbnail generation executed synchronously during the egui frame draw, causing UI lag, frame drops, and freezes when loading documents with many pages.
+* **Solution**:
+  - Implemented [`ThumbnailWorker`](file:///d:/Work/Repos/my_repo/pdf-arranger-clone/src/pdf/renderer.rs) running on a dedicated background worker thread using `crossbeam-channel`.
+  - The worker processes pages asynchronously and calls `ctx.request_repaint()` to trigger reactive UI repaints the moment an image is ready.
+  - Added skeleton placeholder cards while thumbnails load in the background, paired with a status bar spinner and pending counter.
+
+### 4. Single-File Ingestion Limitation
+* **Problem**: Only one PDF file could be loaded at a time; drag-and-drop only grabbed the first dropped file.
+* **Solution**:
+  - Replaced `rfd::FileDialog::pick_file()` with `rfd::FileDialog::pick_files()` in the toolbar.
+  - Updated the drag-and-drop listener to filter and batch-load all dropped `.pdf` files.
+  - Implemented `load_pdf_files()` to append multiple documents into the project model.
+
+### 5. Toolbar Overlap & Pitch-Black Empty Screen
+* **Problem**: Default window opening size (~800x600) was too small, causing sliders and action buttons to collide. The initial screen was a pitch-black void with plain single-line text.
+* **Solution**:
+  - Configured native window viewport in [`src/main.rs`](file:///d:/Work/Repos/my_repo/pdf-arranger-clone/src/main.rs) with initial size `1120 x 760` (min `720 x 500`).
+  - Constrained slider widths (`slider_width = 80.0`) and simplified labels to prevent collisions.
+  - Designed an interactive dropzone card in [`src/ui/thumbnail_grid.rs`](file:///d:/Work/Repos/my_repo/pdf-arranger-clone/src/ui/thumbnail_grid.rs) with a red PDF icon badge, drag-over hover blue glow (`#4285f4`), primary browse button, and feature badges.
+
+### 6. Ambiguous Multi-PDF Thumbnail Identification
+* **Problem**: When multiple documents were opened, every thumbnail showed `Page X`, making it unclear which source document a page originated from.
+* **Solution**:
+  - Formatted thumbnail titles as `number1(Page number2)` (e.g. `1(Page 1)`..`1(Page 10)`, `2(Page 1)`..`2(Page 4)`), where `number1` is the 1-based source PDF file index and `number2` is that document's page number.
+  - Added hover tooltips displaying the exact source filename and page index.
 
 ---
-
-## 25 Sep 2026
-## Achieved Milestones & Features
-
-- **Milestone 1: File Loading & Ingestion**
-  - Implemented native file dialogs (`rfd`) and drag-and-drop inputs to load PDF documents.
-  - Extracted metadata and page counts seamlessly using `lopdf`.
-
-* **Milestone 2: PDF Rendering Engine**
-  - Built a high-performance `PdfRenderer` module utilizing `pdfium-render`.
-  - Converted individual PDF pages into crisp dynamic image thumbnails with live processing feedback in the status bar.
-
-* **Milestone 3: UI Thumbnail Grid & Layout**
-  - Developed an interactive, scrollable thumbnail grid UI supporting single selection, `Ctrl` multi-selection, and `Shift` range selection.
-  - Integrated efficient texture caching to optimize memory usage and rendering performance.
-  - Added customizable column counts and dynamic thumbnail scaling via top-panel sliders, featuring a compact text-only view when scaled down to the minimum size.
-
-* **Milestone 4: Page & Document Manipulation**
-  - Implemented robust project model functions for page deletion, duplication, and reordering.
-  - Added context menus and keyboard shortcuts (`Delete`/`Backspace`, `Ctrl + D`, `Ctrl + Arrow Keys`, and "Invert Selection") for intuitive layout management.
-
-* **Milestone 5: PDF Export**
-  - Implemented a recursive PDF exporter via `lopdf` that accurately compiles arranged project pages.
-  - Preserved deep-object trees, vector graphics, layouts, and special embedded fonts in exported documents.
-
 
 ### Screenshots
 
-<img src="./screenshots/pdf-arranger-clone.webp">
-
+<img src="./screenshots/pdf-arranger-clone.webp" width=720>
 
 <img src="./screenshots/pdf-arranger.gif">
+

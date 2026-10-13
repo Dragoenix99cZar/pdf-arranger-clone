@@ -16,17 +16,21 @@ pub struct Project {
 }
 
 impl Project {
-    pub fn add_source_file(&mut self, path: PathBuf, page_count: u32) {
+    pub fn add_source_file(&mut self, path: PathBuf, page_count: u32) -> Vec<PageItem> {
         let doc_index = self.source_files.len();
         self.source_files.push(path);
 
+        let mut new_pages = Vec::with_capacity(page_count as usize);
         for page_num in 1..=page_count {
-            self.pages.push(PageItem {
+            let item = PageItem {
                 id: Uuid::new_v4(),
                 source_document: doc_index,
                 source_page: page_num,
-            });
+            };
+            new_pages.push(item.clone());
+            self.pages.push(item);
         }
+        new_pages
     }
 
     pub fn delete_pages(&mut self, selected_ids: &HashSet<Uuid>) {

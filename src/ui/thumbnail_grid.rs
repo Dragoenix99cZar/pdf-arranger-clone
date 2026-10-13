@@ -3,9 +3,7 @@ use eframe::egui;
 
 pub fn show_thumbnail_grid(app: &mut PdfArrangerApp, ui: &mut egui::Ui) {
     if app.project.pages.is_empty() {
-        ui.centered_and_justified(|ui| {
-            ui.label("No PDF loaded. Click 'Open PDF' or drag & drop a file here.");
-        });
+        show_empty_state(app, ui);
         return;
     }
 
@@ -30,6 +28,10 @@ pub fn show_thumbnail_grid(app: &mut PdfArrangerApp, ui: &mut egui::Ui) {
     });
 
     if delete_requested && !app.selected_ids.is_empty() {
+        for id in &app.selected_ids {
+            app.texture_cache.remove(id);
+            app.pending_thumbnails.remove(id);
+        }
         app.project.delete_pages(&app.selected_ids);
         app.selected_ids.clear();
         app.status_message = "Deleted selected pages.".to_string();
@@ -37,6 +39,16 @@ pub fn show_thumbnail_grid(app: &mut PdfArrangerApp, ui: &mut egui::Ui) {
 
     if duplicate_requested && !app.selected_ids.is_empty() {
         let new_ids = app.project.duplicate_pages(&app.selected_ids);
+        let duplicated_pages: Vec<_> = app
+            .project
+            .pages
+            .iter()
+            .filter(|p| new_ids.contains(&p.id))
+            .cloned()
+            .collect();
+        for page in &duplicated_pages {
+            app.request_thumbnail(page);
+        }
         app.selected_ids = new_ids;
         app.status_message = "Duplicated selected pages.".to_string();
     }
@@ -77,35 +89,23 @@ pub fn show_thumbnail_grid(app: &mut PdfArrangerApp, ui: &mut egui::Ui) {
                             if let Some(texture) = app.texture_cache.get(&page.id) {
                                 Some(texture.clone())
                             } else {
-                                app.status_message =
-                                    format!("Processing page: {}", page.source_page);
-                                let pdf_path =
-                                    app.project.source_files[page.source_document].clone();
-
-                                let img = app
-                                    .renderer
-                                    .render_page_thumbnail(&pdf_path, page.source_page, 600)
-                                    .unwrap_or_else(|_| image::DynamicImage::new_rgb8(100, 140));
-
-                                let size = [img.width() as usize, img.height() as usize];
-                                let image_buffer = img.to_rgba8();
-                                let pixels = image_buffer.as_flat_samples();
-                                let color_image = egui::ColorImage::from_rgba_unmultiplied(
-                                    size,
-                                    pixels.as_slice(),
-                                );
-
-                                let texture = ui.ctx().load_texture(
-                                    format!("thumb-{}", page.id),
-                                    color_image,
-                                    egui::TextureOptions::default(),
-                                );
-
-                                app.texture_cache.insert(page.id, texture.clone());
-                                Some(texture)
+                                app.request_thumbnail(page);
+                                None
                             }
                         } else {
                             None
+                        };
+
+                        let multiple_files = app.project.source_files.len() > 1;
+                        let page_label = if multiple_files {
+                            format!("{}(Page {})", page.source_document + 1, page.source_page)
+                        } else {
+                            format!("Page {}", page.source_page)
+                        };
+                        let compact_label = if multiple_files {
+                            format!("{}({})", page.source_document + 1, page.source_page)
+                        } else {
+                            format!("{}", page.source_page)
                         };
 
                         let inner_response = egui::Frame::new()
@@ -130,20 +130,53 @@ pub fn show_thumbnail_grid(app: &mut PdfArrangerApp, ui: &mut egui::Ui) {
                                             egui::vec2(thumb_width, thumb_height),
                                         ));
                                         ui.add_space(4.0);
-                                        ui.label(format!("Page {}", page.source_page));
+                                        ui.label(&page_label);
+                                    } else if show_preview {
+                                        let (rect, _) = ui.allocate_exact_size(
+                                            egui::vec2(thumb_width, thumb_height),
+                                            egui::Sense::hover(),
+                                        );
+                                        ui.painter().rect_filled(
+                                            rect,
+                                            4.0,
+                                            ui.visuals().faint_bg_color,
+                                        );
+                                        ui.painter().text(
+                                            rect.center(),
+                                            egui::Align2::CENTER_CENTER,
+                                            &page_label,
+                                            egui::FontId::proportional(12.0),
+                                            ui.visuals().weak_text_color(),
+                                        );
+                                        ui.add_space(4.0);
+                                        ui.label(&page_label);
                                     } else {
-                                        // Compact text-only view when width == 40
-                                        ui.label(format!("{}", page.source_page));
+                                        // Compact text-only view when width <= 40
+                                        ui.label(&compact_label);
                                     }
                                 });
                             });
 
                         // Explicitly add click sensing to the card's bounding rectangle
-                        let response = ui.interact(
+                        let mut response = ui.interact(
                             inner_response.response.rect,
                             ui.id().with(page.id),
                             egui::Sense::click(),
                         );
+
+                        if let Some(path) = app.project.source_files.get(page.source_document) {
+                            let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+                            if multiple_files {
+                                response = response.on_hover_text(format!(
+                                    "File #{}: {}\nPage {}",
+                                    page.source_document + 1,
+                                    file_name,
+                                    page.source_page
+                                ));
+                            } else {
+                                response = response.on_hover_text(format!("Page {}", page.source_page));
+                            }
+                        }
 
                         // Context menu for right-click page actions
                         response.context_menu(|ui| {
@@ -152,7 +185,18 @@ pub fn show_thumbnail_grid(app: &mut PdfArrangerApp, ui: &mut egui::Ui) {
                                     app.selected_ids.clear();
                                     app.selected_ids.insert(page.id);
                                 }
-                                app.selected_ids = app.project.duplicate_pages(&app.selected_ids);
+                                let new_ids = app.project.duplicate_pages(&app.selected_ids);
+                                let duplicated_pages: Vec<_> = app
+                                    .project
+                                    .pages
+                                    .iter()
+                                    .filter(|p| new_ids.contains(&p.id))
+                                    .cloned()
+                                    .collect();
+                                for p in &duplicated_pages {
+                                    app.request_thumbnail(p);
+                                }
+                                app.selected_ids = new_ids;
                                 app.status_message = "Duplicated selected pages.".to_string();
                                 ui.close();
                             }
@@ -191,6 +235,10 @@ pub fn show_thumbnail_grid(app: &mut PdfArrangerApp, ui: &mut egui::Ui) {
                                 if !app.selected_ids.contains(&page.id) {
                                     app.selected_ids.clear();
                                     app.selected_ids.insert(page.id);
+                                }
+                                for id in &app.selected_ids {
+                                    app.texture_cache.remove(id);
+                                    app.pending_thumbnails.remove(id);
                                 }
                                 app.project.delete_pages(&app.selected_ids);
                                 app.selected_ids.clear();
@@ -258,4 +306,122 @@ pub fn show_thumbnail_grid(app: &mut PdfArrangerApp, ui: &mut egui::Ui) {
                 });
             }
         });
+}
+
+fn show_empty_state(app: &mut PdfArrangerApp, ui: &mut egui::Ui) {
+    let is_hovered = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
+
+    ui.vertical_centered(|ui| {
+        let total_height = ui.available_height();
+        let desired_card_height = 360.0;
+        let top_pad = ((total_height - desired_card_height) * 0.45).max(30.0);
+        ui.add_space(top_pad);
+
+        let card_width = 540.0;
+        let border_color = if is_hovered {
+            egui::Color32::from_rgb(66, 133, 244)
+        } else {
+            egui::Color32::from_rgb(50, 54, 66)
+        };
+        let bg_color = if is_hovered {
+            egui::Color32::from_rgb(26, 34, 52)
+        } else {
+            egui::Color32::from_rgb(24, 26, 33)
+        };
+
+        egui::Frame::new()
+            .fill(bg_color)
+            .stroke(egui::Stroke::new(if is_hovered { 2.5 } else { 1.5 }, border_color))
+            .corner_radius(16.0)
+            .inner_margin(32.0)
+            .show(ui, |ui| {
+                ui.set_width(card_width);
+                ui.vertical_centered(|ui| {
+                    // Document Badge
+                    egui::Frame::new()
+                        .fill(egui::Color32::from_rgb(219, 58, 58))
+                        .corner_radius(8.0)
+                        .inner_margin(8.0)
+                        .show(ui, |ui| {
+                            ui.colored_label(
+                                egui::Color32::WHITE,
+                                egui::RichText::new("📄  PDF").strong().size(14.0),
+                            );
+                        });
+
+                    ui.add_space(16.0);
+
+                    if is_hovered {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(66, 133, 244),
+                            egui::RichText::new("Drop files to import now!")
+                                .strong()
+                                .size(22.0),
+                        );
+                    } else {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(240, 243, 250),
+                            egui::RichText::new("Drop PDF files here")
+                                .strong()
+                                .size(22.0),
+                        );
+                    }
+
+                    ui.add_space(6.0);
+                    ui.colored_label(
+                        egui::Color32::from_rgb(140, 146, 165),
+                        egui::RichText::new(
+                            "Open single or multiple PDF documents to rearrange, merge, duplicate, or delete pages",
+                        )
+                        .size(13.0),
+                    );
+
+                    ui.add_space(24.0);
+
+                    let open_btn = egui::Button::new(
+                        egui::RichText::new("📂  Browse PDF Files...")
+                            .size(15.0)
+                            .strong()
+                            .color(egui::Color32::WHITE),
+                    )
+                    .min_size(egui::vec2(220.0, 42.0))
+                    .fill(egui::Color32::from_rgb(46, 100, 215))
+                    .corner_radius(8.0);
+
+                    if ui.add(open_btn).clicked() {
+                        if let Some(paths) = rfd::FileDialog::new()
+                            .add_filter("PDF Documents", &["pdf"])
+                            .pick_files()
+                        {
+                            app.load_pdf_files(paths);
+                        }
+                    }
+
+                    ui.add_space(26.0);
+                    ui.separator();
+                    ui.add_space(14.0);
+
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
+                        for tag in [
+                            "✦ Multi-File Merge",
+                            "✦ Drag & Drop",
+                            "✦ Instant Preview",
+                            "✦ Bookmarks Preserved",
+                        ] {
+                            egui::Frame::new()
+                                .fill(egui::Color32::from_rgb(32, 35, 45))
+                                .corner_radius(6.0)
+                                .inner_margin(6.0)
+                                .show(ui, |ui| {
+                                    ui.colored_label(
+                                        egui::Color32::from_rgb(175, 180, 200),
+                                        egui::RichText::new(tag).size(11.5),
+                                    );
+                                });
+                        }
+                    });
+                });
+            });
+    });
 }

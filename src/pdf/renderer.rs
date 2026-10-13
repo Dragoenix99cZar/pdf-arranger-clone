@@ -39,3 +39,67 @@ impl PdfRenderer {
         Ok(image)
     }
 }
+
+pub struct ThumbnailRequest {
+    pub page_id: uuid::Uuid,
+    pub pdf_path: std::path::PathBuf,
+    pub page_number: u32,
+    pub max_dimension: u16,
+}
+
+pub struct ThumbnailResponse {
+    pub page_id: uuid::Uuid,
+    pub image: eframe::egui::ColorImage,
+}
+
+pub struct ThumbnailWorker {
+    request_tx: crossbeam_channel::Sender<ThumbnailRequest>,
+    response_rx: crossbeam_channel::Receiver<ThumbnailResponse>,
+}
+
+impl ThumbnailWorker {
+    pub fn new(ctx: eframe::egui::Context) -> Self {
+        let (req_tx, req_rx) = crossbeam_channel::unbounded::<ThumbnailRequest>();
+        let (res_tx, res_rx) = crossbeam_channel::unbounded::<ThumbnailResponse>();
+
+        std::thread::Builder::new()
+            .name("pdf-thumbnail-worker".to_string())
+            .spawn(move || {
+                let renderer = PdfRenderer::default();
+                while let Ok(req) = req_rx.recv() {
+                    if let Ok(img) = renderer.render_page_thumbnail(
+                        &req.pdf_path,
+                        req.page_number,
+                        req.max_dimension,
+                    ) {
+                        let size = [img.width() as usize, img.height() as usize];
+                        let image_buffer = img.to_rgba8();
+                        let pixels = image_buffer.as_flat_samples();
+                        let color_image = eframe::egui::ColorImage::from_rgba_unmultiplied(
+                            size,
+                            pixels.as_slice(),
+                        );
+                        let _ = res_tx.send(ThumbnailResponse {
+                            page_id: req.page_id,
+                            image: color_image,
+                        });
+                        ctx.request_repaint();
+                    }
+                }
+            })
+            .expect("Failed to spawn background thumbnail worker thread");
+
+        Self {
+            request_tx: req_tx,
+            response_rx: res_rx,
+        }
+    }
+
+    pub fn request(&self, req: ThumbnailRequest) {
+        let _ = self.request_tx.send(req);
+    }
+
+    pub fn try_recv(&self) -> Result<ThumbnailResponse, crossbeam_channel::TryRecvError> {
+        self.response_rx.try_recv()
+    }
+}
